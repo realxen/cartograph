@@ -47,14 +47,20 @@ func (b *Backend) Query(req service.QueryRequest) (*service.QueryResult, error) 
 	if limit <= 0 {
 		limit = 10
 	}
+	searchText := expandIntentQuery(req.Text)
+
+	type processAccum struct {
+		match        *service.ProcessMatch
+		matchedSteps int
+	}
 
 	var definitions []service.SymbolMatch
 
 	if b.Index != nil {
 		// Fetch extra candidates so we have room to re-rank after
 		// dedup, capPerName, and test-file filtering.
-		fetchLimit := max(limit*3, 30)
-		results, err := b.Index.SearchMulti(req.Text, fetchLimit)
+		fetchLimit := max(limit*6, 60)
+		results, err := b.Index.SearchMulti(searchText, fetchLimit)
 		if err != nil {
 			return nil, fmt.Errorf("query: search: %w", err)
 		}
@@ -65,10 +71,10 @@ func (b *Backend) Query(req service.QueryRequest) (*service.QueryResult, error) 
 			}
 			sm := nodeToSymbolMatch(node, req.Content)
 			sm.Score = r.Score
-			// Boost symbols whose name/path signals domain relevance to the query.
-			sm.Score *= contextBoost(req.Text, sm)
-			// Mild centrality boost for symbols with higher call-graph degree.
+			sm.Score *= contextBoost(searchText, sm)
 			sm.Score *= centralityBoost(node)
+			// Prefer architecture-bearing labels for flow-style queries.
+			sm.Score *= labelBoost(searchText, sm)
 			definitions = append(definitions, sm)
 		}
 		sortByScore(definitions)
@@ -98,7 +104,7 @@ func (b *Backend) Query(req service.QueryRequest) (*service.QueryResult, error) 
 
 	// Hybrid vector search: supplement BM25 results with vector-only
 	// discoveries. BM25 order is preserved; vector adds new results.
-	if extra := b.vectorSupplement(definitions, req.Text, limit, req.Content); len(extra) > 0 {
+	if extra := b.vectorSupplement(definitions, searchText, limit, req.Content); len(extra) > 0 {
 		definitions = append(definitions, extra...)
 	}
 
@@ -131,10 +137,6 @@ func (b *Backend) Query(req service.QueryRequest) (*service.QueryResult, error) 
 	// Map matched symbols to their process memberships.
 	// Process relevance uses multi-signal scoring: BM25 weight, coverage
 	// ratio, step position, and cross-community bonus for discrimination.
-	type processAccum struct {
-		match        *service.ProcessMatch
-		matchedSteps int
-	}
 	processMap := make(map[string]*processAccum)
 	var processSymbols []service.SymbolMatch
 	psDedup := make(map[string]bool) // dedup processSymbols by name+filePath
@@ -185,6 +187,23 @@ func (b *Backend) Query(req service.QueryRequest) (*service.QueryResult, error) 
 				ps.ProcessName = pName
 				processSymbols = append(processSymbols, ps)
 			}
+		}
+	}
+
+	for _, direct := range rankDirectProcesses(b.Graph, searchText, max(limit*3, 20)) {
+		pName := direct.Name
+		if _, seen := processMap[pName]; !seen {
+			directCopy := direct
+			processMap[pName] = &processAccum{
+				match:        &directCopy,
+				matchedSteps: 1,
+			}
+			continue
+		}
+		existing := processMap[pName]
+		existing.match.Relevance += direct.Relevance
+		if existing.matchedSteps == 0 {
+			existing.matchedSteps = 1
 		}
 	}
 
@@ -290,24 +309,36 @@ func (b *Backend) Query(req service.QueryRequest) (*service.QueryResult, error) 
 				if !pn.HasLabel(string(graph.LabelProcess)) {
 					continue
 				}
+				candidates := make([]service.SymbolMatch, 0, len(graph.GetIncomingEdges(pn, graph.RelStepInProcess)))
 				for _, edge := range graph.GetIncomingEdges(pn, graph.RelStepInProcess) {
-					if expandBudget <= 0 {
-						break
-					}
 					sym := edge.GetFrom()
 					sk := symKey{
 						graph.GetStringProp(sym, graph.PropName),
 						graph.GetStringProp(sym, graph.PropFilePath),
 					}
+					if included[sk] || ingestion.IsUsageFile(sk.file) {
+						continue
+					}
+					sm := nodeToSymbolMatch(sym, req.Content)
+					sm.ProcessName = proc.Name
+					sm.Score = expansionCandidateScore(searchText, sym, sm)
+					candidates = append(candidates, sm)
+				}
+				sort.Slice(candidates, func(i, j int) bool {
+					if candidates[i].Score == candidates[j].Score {
+						return candidates[i].Name < candidates[j].Name
+					}
+					return candidates[i].Score > candidates[j].Score
+				})
+				for _, sm := range candidates {
+					if expandBudget <= 0 {
+						break
+					}
+					sk := symKey{sm.Name, sm.FilePath}
 					if included[sk] {
 						continue
 					}
-					if isTestFile(sk.file) {
-						continue
-					}
 					included[sk] = true
-					sm := nodeToSymbolMatch(sym, req.Content)
-					sm.ProcessName = proc.Name
 					processSymbols = append(processSymbols, sm)
 					expandBudget--
 				}
@@ -929,6 +960,74 @@ func nodeToSymbolMatch(node *lpg.Node, includeContent bool) service.SymbolMatch 
 		sm.Content = graph.GetStringProp(node, graph.PropContent)
 	}
 	return sm
+}
+
+func processMatchFromNode(node *lpg.Node) service.ProcessMatch {
+	return service.ProcessMatch{
+		Name:           graph.GetStringProp(node, graph.PropName),
+		HeuristicLabel: graph.GetStringProp(node, graph.PropHeuristicLabel),
+		StepCount:      graph.GetIntProp(node, graph.PropStepCount),
+		CallerCount:    graph.GetIntProp(node, graph.PropCallerCount),
+		Importance:     graph.GetFloat64Prop(node, graph.PropImportance),
+	}
+}
+
+func rankDirectProcesses(g *lpg.Graph, queryText string, limit int) []service.ProcessMatch {
+	if g == nil || limit <= 0 {
+		return nil
+	}
+
+	processes := make([]service.ProcessMatch, 0, limit)
+	graph.ForEachNode(g, func(node *lpg.Node) bool {
+		if !node.HasLabel(string(graph.LabelProcess)) {
+			return true
+		}
+
+		pm := processMatchFromNode(node)
+		if pm.Name == "" {
+			return true
+		}
+		entryPoint := graph.GetStringProp(node, graph.PropEntryPoint)
+		if entryPoint != "" {
+			if entryNode := graph.FindNodeByID(g, entryPoint); entryNode != nil {
+				if ingestion.IsUsageFile(graph.GetStringProp(entryNode, graph.PropFilePath)) {
+					return true
+				}
+			}
+		}
+		score := processBoost(queryText, pm.Name, pm.HeuristicLabel, entryPoint)
+		if score <= 1.0 {
+			return true
+		}
+		pm.Relevance = score - 1.0
+		processes = append(processes, pm)
+		return true
+	})
+
+	sort.Slice(processes, func(i, j int) bool {
+		if processes[i].Relevance == processes[j].Relevance {
+			return processes[i].Importance > processes[j].Importance
+		}
+		return processes[i].Relevance > processes[j].Relevance
+	})
+	if len(processes) > limit {
+		processes = processes[:limit]
+	}
+	return processes
+}
+
+func expansionCandidateScore(queryText string, node *lpg.Node, sm service.SymbolMatch) float64 {
+	score := contextBoost(queryText, sm) * centralityBoost(node)
+	switch sm.Label {
+	case string(graph.LabelClass), string(graph.LabelMethod), string(graph.LabelFunction),
+		string(graph.LabelConstructor), string(graph.LabelInterface):
+		score += 0.2
+	case string(graph.LabelFile):
+		score -= 0.2
+	case string(graph.LabelProperty):
+		score -= 0.1
+	}
+	return score
 }
 
 func findSymbol(g *lpg.Graph, name, file, uid string) *lpg.Node {

@@ -529,6 +529,11 @@ func (c *AnalyzeCmd) runLocal(cli *CLI, target string) error {
 	}); err != nil {
 		return fmt.Errorf("analyze: update registry: %w", err)
 	}
+	if c.Embed == embedOff {
+		if err := registry.ClearEmbedding(repoName); err != nil {
+			return fmt.Errorf("analyze: clear embedding metadata: %w", err)
+		}
+	}
 
 	if cli.Client != nil {
 		_ = cli.Client.Reload(service.ReloadRequest{Repo: repoName})
@@ -805,6 +810,11 @@ func (c *AnalyzeCmd) runCloneToMemory(
 	}); err != nil {
 		return fmt.Errorf("analyze: update registry: %w", err)
 	}
+	if c.Embed == embedOff {
+		if err := registry.ClearEmbedding(repoName); err != nil {
+			return fmt.Errorf("analyze: clear embedding metadata: %w", err)
+		}
+	}
 
 	if cli.Client != nil {
 		_ = cli.Client.Reload(service.ReloadRequest{Repo: repoName})
@@ -947,6 +957,11 @@ func (c *AnalyzeCmd) runCloneToDisk(
 		},
 	}); err != nil {
 		return fmt.Errorf("analyze: update registry: %w", err)
+	}
+	if c.Embed == embedOff {
+		if err := registry.ClearEmbedding(repoName); err != nil {
+			return fmt.Errorf("analyze: clear embedding metadata: %w", err)
+		}
 	}
 
 	if cli.Client != nil {

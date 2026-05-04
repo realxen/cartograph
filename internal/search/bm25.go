@@ -49,6 +49,7 @@ type IndexDoc struct {
 	Label       string `json:"label"`
 	FilePath    string `json:"filePath"`
 	Content     string `json:"content,omitempty"`
+	Signature   string `json:"signature,omitempty"`
 	Description string `json:"description,omitempty"`
 }
 
@@ -71,6 +72,7 @@ func NewIndex(path string) (*Index, error) {
 	textField.Analyzer = "en"
 	docMapping.AddFieldMappingsAt("name", textField)
 	docMapping.AddFieldMappingsAt("content", textField)
+	docMapping.AddFieldMappingsAt("signature", textField)
 	docMapping.AddFieldMappingsAt("description", textField)
 
 	kwField := bleve.NewKeywordFieldMapping()
@@ -108,6 +110,7 @@ func NewMemoryIndex() (*Index, error) {
 	textField.Analyzer = "en"
 	docMapping.AddFieldMappingsAt("name", textField)
 	docMapping.AddFieldMappingsAt("content", textField)
+	docMapping.AddFieldMappingsAt("signature", textField)
 	docMapping.AddFieldMappingsAt("description", textField)
 
 	kwField := bleve.NewKeywordFieldMapping()
@@ -167,6 +170,7 @@ func (ix *Index) IndexGraph(g *lpg.Graph) (int, error) {
 			Label:       label,
 			FilePath:    graph.GetStringProp(n, graph.PropFilePath),
 			Content:     content,
+			Signature:   expandedSignature(graph.GetStringProp(n, graph.PropSignature)),
 			Description: graph.GetStringProp(n, graph.PropDescription),
 		}
 
@@ -300,6 +304,13 @@ func (ix *Index) SearchMulti(rawQuery string, limit int) ([]SearchResult, error)
 		return nil, err
 	}
 
+	// Signature field: declarations often carry high-signal type names,
+	// parameters, annotations, and return types that help framework-heavy code.
+	signatureHits, err := searchField(contentQuery, "signature")
+	if err != nil {
+		return nil, err
+	}
+
 	// FilePath field: search with cleaned query so file names/paths matching
 	// concept terms (e.g., "parser", "handler", "extract") are discoverable.
 	var filePathHits []SearchResult
@@ -316,14 +327,16 @@ func (ix *Index) SearchMulti(rawQuery string, limit int) ([]SearchResult, error)
 	nameWeight := 3.0
 	contentWeight := 1.0
 	nameCleanedWeight := 1.5
+	signatureWeight := 1.0
 	filePathWeight := 0.5
-	descWeight := 1.5 // doc comments have high signal for NL queries
+	descWeight := 1.5
 	if isNaturalLanguage {
 		nameWeight = 1.5
 		contentWeight = 2.0
 		nameCleanedWeight = 1.5
+		signatureWeight = 1.5
 		filePathWeight = 1.0
-		descWeight = 2.0 // even higher weight for NL queries
+		descWeight = 2.0
 	}
 
 	lists := []RankedList{
@@ -332,6 +345,9 @@ func (ix *Index) SearchMulti(rawQuery string, limit int) ([]SearchResult, error)
 	}
 	if len(nameHitsCleaned) > 0 {
 		lists = append(lists, RankedList{Results: nameHitsCleaned, Weight: nameCleanedWeight})
+	}
+	if len(signatureHits) > 0 {
+		lists = append(lists, RankedList{Results: signatureHits, Weight: signatureWeight})
 	}
 	if len(filePathHits) > 0 {
 		lists = append(lists, RankedList{Results: filePathHits, Weight: filePathWeight})
@@ -534,6 +550,26 @@ func expandedName(name, filePath string) string {
 	}
 
 	return strings.Join(parts, " ")
+}
+
+func expandedSignature(signature string) string {
+	if signature == "" {
+		return ""
+	}
+	normalized := strings.NewReplacer(
+		".", " ",
+		"-", " ",
+		"_", " ",
+		"/", " ",
+		"(", " ",
+		")", " ",
+		",", " ",
+	).Replace(signature)
+	expanded := expandCamelCase(normalized)
+	if expanded == signature {
+		return signature
+	}
+	return signature + " " + expanded
 }
 
 // expandCamelCase inserts spaces before uppercase letters that follow

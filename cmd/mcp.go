@@ -52,11 +52,17 @@ func (c *McpCmd) Run(cli *CLI) error {
 			if !ok {
 				return nil
 			}
+			embedDir := ""
+			var embedFn query.QueryEmbedFn
+			if mc.HasCompleteEmbeddings(repo) {
+				embedDir = mc.GetRepoDir(repo)
+				embedFn = mc.QueryEmbed
+			}
 			return &query.Backend{
 				Graph:    g,
 				Index:    idx,
-				EmbedDir: mc.GetRepoDir(repo),
-				EmbedFn:  mc.QueryEmbed,
+				EmbedDir: embedDir,
+				EmbedFn:  embedFn,
 			}
 		})
 		_ = mc.LoadAllFromRegistry()
