@@ -18,10 +18,10 @@ func TestServerHasCompleteEmbeddings(t *testing.T) {
 	if err := reg.Add(storage.RegistryEntry{Name: "acme/running", Hash: "h2"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := reg.UpdateEmbedding("acme/ready", storage.EmbeddingInfo{Status: embedStatusComplete}); err != nil {
+	if err := reg.UpdateEmbedding("acme/ready", storage.EmbeddingInfo{Status: storage.EmbeddingStatusComplete}); err != nil {
 		t.Fatal(err)
 	}
-	if err := reg.UpdateEmbedding("acme/running", storage.EmbeddingInfo{Status: embedStatusRunning}); err != nil {
+	if err := reg.UpdateEmbedding("acme/running", storage.EmbeddingInfo{Status: storage.EmbeddingStatusRunning}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -49,7 +49,7 @@ func TestMemoryClientHasCompleteEmbeddings(t *testing.T) {
 	if err := reg.Add(storage.RegistryEntry{Name: "acme/none", Hash: "h2"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := reg.UpdateEmbedding("acme/ready", storage.EmbeddingInfo{Status: embedStatusComplete}); err != nil {
+	if err := reg.UpdateEmbedding("acme/ready", storage.EmbeddingInfo{Status: storage.EmbeddingStatusComplete}); err != nil {
 		t.Fatal(err)
 	}
 

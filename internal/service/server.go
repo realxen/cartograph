@@ -30,10 +30,9 @@ import (
 const DefaultIdleTimeout = 30 * time.Minute
 
 const (
-	networkUnix         = "unix"
-	embedStatusComplete = "complete"
-	embedStatusRunning  = "running"
-	embedProviderLlama  = "llamacpp"
+	networkUnix        = "unix"
+	embedStatusRunning = "running"
+	embedProviderLlama = "llamacpp"
 )
 
 // Server is the background service that holds in-memory graphs and
@@ -293,18 +292,7 @@ func (s *Server) GetRepoDir(repo string) string {
 // metadata marks embeddings as complete. Query backends use this to decide
 // whether hybrid vector search should be enabled.
 func (s *Server) HasCompleteEmbeddings(repo string) bool {
-	if s.dataDir == "" {
-		return false
-	}
-	registry, err := storage.NewRegistry(s.dataDir)
-	if err != nil {
-		return false
-	}
-	entry, err := registry.Resolve(repo)
-	if err != nil {
-		return false
-	}
-	return entry.Meta.EmbeddingStatus == embedStatusComplete
+	return embeddingComplete(s.dataDir, repo)
 }
 
 // QueryEmbed embeds a single query text using a lazily initialized

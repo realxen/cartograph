@@ -81,14 +81,7 @@ func (r *Registry) Add(entry RegistryEntry) error {
 	}
 	defer r.flock.Unlock()
 	if prev, ok := r.entries[entry.Hash]; ok {
-		entry.Meta.EmbeddingStatus = prev.Meta.EmbeddingStatus
-		entry.Meta.EmbeddingModel = prev.Meta.EmbeddingModel
-		entry.Meta.EmbeddingDims = prev.Meta.EmbeddingDims
-		entry.Meta.EmbeddingProvider = prev.Meta.EmbeddingProvider
-		entry.Meta.EmbeddingNodes = prev.Meta.EmbeddingNodes
-		entry.Meta.EmbeddingTotal = prev.Meta.EmbeddingTotal
-		entry.Meta.EmbeddingError = prev.Meta.EmbeddingError
-		entry.Meta.EmbeddingDuration = prev.Meta.EmbeddingDuration
+		entry.Meta.CopyEmbeddingFrom(prev.Meta)
 	}
 	r.entries[entry.Hash] = entry
 	return r.save()
@@ -387,16 +380,20 @@ func (r *Registry) ClearEmbedding(nameOrHash string) error {
 		return fmt.Errorf("repo %q not found in registry", nameOrHash)
 	}
 	e := r.entries[hash]
-	e.Meta.EmbeddingStatus = ""
-	e.Meta.EmbeddingModel = ""
-	e.Meta.EmbeddingDims = 0
-	e.Meta.EmbeddingProvider = ""
-	e.Meta.EmbeddingNodes = 0
-	e.Meta.EmbeddingTotal = 0
-	e.Meta.EmbeddingError = ""
-	e.Meta.EmbeddingDuration = ""
+	e.Meta.ResetEmbedding()
 	r.entries[hash] = e
 	return r.save()
+}
+
+// IsEmbeddingComplete reports whether the repo's persisted registry metadata
+// marks embeddings as complete. Returns false on any lookup error so callers
+// degrade to BM25-only behavior. Resolution accepts a name or hash.
+func (r *Registry) IsEmbeddingComplete(nameOrHash string) bool {
+	entry, err := r.Resolve(nameOrHash)
+	if err != nil {
+		return false
+	}
+	return entry.Meta.EmbeddingComplete()
 }
 
 // resolveToHashLocked resolves a name-or-hash to a hash.

@@ -85,13 +85,7 @@ func (b *Backend) Query(req service.QueryRequest) (*service.QueryResult, error) 
 		// candidates BEFORE truncation so they don't steal result
 		// slots meant for architectural symbols.
 		if !req.IncludeTests {
-			var archDefs []service.SymbolMatch
-			for _, d := range definitions {
-				if !ingestion.IsUsageFile(d.FilePath) {
-					archDefs = append(archDefs, d)
-				}
-			}
-			definitions = archDefs
+			definitions, _ = partitionByUsage(definitions)
 		}
 
 		if len(definitions) > limit {
@@ -110,26 +104,11 @@ func (b *Backend) Query(req service.QueryRequest) (*service.QueryResult, error) 
 
 	var usageExamples []service.SymbolMatch
 	if req.IncludeTests {
-		// With --include-tests, partition tests into a separate section.
-		var archDefs []service.SymbolMatch
-		for _, d := range definitions {
-			if ingestion.IsUsageFile(d.FilePath) {
-				usageExamples = append(usageExamples, d)
-			} else {
-				archDefs = append(archDefs, d)
-			}
-		}
-		definitions = archDefs
+		definitions, usageExamples = partitionByUsage(definitions)
 	} else {
 		// BM25 tests already filtered above; also remove any test
 		// files that arrived via vector supplement.
-		var archDefs []service.SymbolMatch
-		for _, d := range definitions {
-			if !ingestion.IsUsageFile(d.FilePath) {
-				archDefs = append(archDefs, d)
-			}
-		}
-		definitions = archDefs
+		definitions, _ = partitionByUsage(definitions)
 	}
 	// No final truncation — vector supplement results are "bonus"
 	// beyond the BM25 limit, matching original behavior.
@@ -1579,6 +1558,20 @@ func capPerName(defs []service.SymbolMatch) []service.SymbolMatch {
 		out = append(out, d)
 	}
 	return out
+}
+
+// partitionByUsage splits definitions into architectural symbols and usage
+// examples (tests, fixtures, samples) based on file path. Used by Backend.Query
+// to keep test-bearing matches from crowding out architectural results.
+func partitionByUsage(defs []service.SymbolMatch) (arch, usage []service.SymbolMatch) {
+	for _, d := range defs {
+		if ingestion.IsUsageFile(d.FilePath) {
+			usage = append(usage, d)
+		} else {
+			arch = append(arch, d)
+		}
+	}
+	return arch, usage
 }
 
 // Schema introspects the graph and returns a summary of node labels,

@@ -122,18 +122,7 @@ func (mc *MemoryClient) GetRepoDir(repo string) string {
 // metadata marks embeddings as complete. Query backends use this to decide
 // whether hybrid vector search should be enabled.
 func (mc *MemoryClient) HasCompleteEmbeddings(repo string) bool {
-	if mc.dataDir == "" {
-		return false
-	}
-	registry, err := storage.NewRegistry(mc.dataDir)
-	if err != nil {
-		return false
-	}
-	entry, err := registry.Resolve(repo)
-	if err != nil {
-		return false
-	}
-	return entry.Meta.EmbeddingStatus == embedStatusComplete
+	return embeddingComplete(mc.dataDir, repo)
 }
 
 // QueryEmbed embeds a single query text using a lazily initialized

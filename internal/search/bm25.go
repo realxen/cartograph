@@ -321,39 +321,33 @@ func (ix *Index) SearchMulti(rawQuery string, limit int) ([]SearchResult, error)
 		}
 	}
 
-	// Fuse with weighted RRF. Adjust weights based on query type:
-	// - NL queries: content and filePath are more important
-	// - Identifier queries: name is more important
-	nameWeight := 3.0
-	contentWeight := 1.0
-	nameCleanedWeight := 1.5
-	signatureWeight := 1.0
-	filePathWeight := 0.5
-	descWeight := 1.5
+	// Field weights — different profiles for NL vs identifier queries.
+	// Each weight applies to the corresponding hits list below.
+	type fieldWeights struct {
+		name, content, nameCleaned, signature, filePath, desc float64
+	}
+	identifierWeights := fieldWeights{name: 3.0, content: 1.0, nameCleaned: 1.5, signature: 1.0, filePath: 0.5, desc: 1.5}
+	naturalLanguageWeights := fieldWeights{name: 1.5, content: 2.0, nameCleaned: 1.5, signature: 1.5, filePath: 1.0, desc: 2.0}
+	w := identifierWeights
 	if isNaturalLanguage {
-		nameWeight = 1.5
-		contentWeight = 2.0
-		nameCleanedWeight = 1.5
-		signatureWeight = 1.5
-		filePathWeight = 1.0
-		descWeight = 2.0
+		w = naturalLanguageWeights
 	}
 
+	// Always-included primary fields, then optionals appended only when
+	// they have hits. Ordering is stable for deterministic RRF fusion.
 	lists := []RankedList{
-		{Results: nameHitsRaw, Weight: nameWeight},
-		{Results: contentHits, Weight: contentWeight},
+		{Results: nameHitsRaw, Weight: w.name},
+		{Results: contentHits, Weight: w.content},
 	}
-	if len(nameHitsCleaned) > 0 {
-		lists = append(lists, RankedList{Results: nameHitsCleaned, Weight: nameCleanedWeight})
-	}
-	if len(signatureHits) > 0 {
-		lists = append(lists, RankedList{Results: signatureHits, Weight: signatureWeight})
-	}
-	if len(filePathHits) > 0 {
-		lists = append(lists, RankedList{Results: filePathHits, Weight: filePathWeight})
-	}
-	if len(descHits) > 0 {
-		lists = append(lists, RankedList{Results: descHits, Weight: descWeight})
+	for _, opt := range []RankedList{
+		{Results: nameHitsCleaned, Weight: w.nameCleaned},
+		{Results: signatureHits, Weight: w.signature},
+		{Results: filePathHits, Weight: w.filePath},
+		{Results: descHits, Weight: w.desc},
+	} {
+		if len(opt.Results) > 0 {
+			lists = append(lists, opt)
+		}
 	}
 	fused := WeightedRRFMerge(lists...)
 
